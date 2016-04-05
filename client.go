@@ -5,10 +5,11 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
-	"github.com/quipo/statsd/event"
+	"github.com/reillywatson/statsd/event"
 )
 
 // Logger interface compatible with log.Logger
@@ -29,6 +30,9 @@ var UDPPayloadSize int = 512
 // Hostname is exported so clients can set it to something different than the default
 var Hostname string
 
+// FQDN is exported so clients can set it to something different than the default
+var FQDN string
+
 var errNotConnected = fmt.Errorf("cannot send stats, not connected to StatsD server")
 
 func init() {
@@ -36,6 +40,14 @@ func init() {
 	if nil == err {
 		Hostname = host
 	}
+	fullyQualified, err := fqdn()
+	if nil == err {
+		FQDN = fullyQualified
+	}
+}
+func fqdn() (string, error) {
+	out, err := exec.Command("hostname", "-f").Output()
+	return strings.Replace(strings.TrimSpace(string(out)), ".", "_", -1), err
 }
 
 // StatsdClient is a client library to send events to StatsD
@@ -51,6 +63,7 @@ type StatsdClient struct {
 func NewStatsdClient(addr string, prefix string) *StatsdClient {
 	// allow %HOST% in the prefix string
 	prefix = strings.Replace(prefix, "%HOST%", Hostname, 1)
+	prefix = strings.Replace(prefix, "%FQDN%", FQDN, 1)
 	return &StatsdClient{
 		addr:           addr,
 		prefix:         prefix,
@@ -185,6 +198,7 @@ func (c *StatsdClient) send(stat string, format string, value interface{}) error
 		return errNotConnected
 	}
 	stat = strings.Replace(stat, "%HOST%", Hostname, 1)
+	stat = strings.Replace(stat, "%FQDN%", FQDN, 1)
 	// if sending tcp append a newline
 	format = fmt.Sprintf(c.eventStringTpl, c.prefix, stat, format)
 	_, err := fmt.Fprintf(c.conn, format, value)
@@ -197,8 +211,10 @@ func (c *StatsdClient) SendEvent(e event.Event) error {
 		return errNotConnected
 	}
 	for _, stat := range e.Stats() {
-		//fmt.Printf("SENDING EVENT %s%s\n", c.prefix, strings.Replace(stat, "%HOST%", Hostname, 1))
-		_, err := fmt.Fprintf(c.conn, "%s%s", c.prefix, strings.Replace(stat, "%HOST%", Hostname, 1))
+		stat = strings.Replace(stat, "%HOST%", Hostname, 1)
+		stat = strings.Replace(stat, "%FQDN%", FQDN, 1)
+		//fmt.Printf("SENDING EVENT %s%s\n", c.prefix, stat)
+		_, err := fmt.Fprintf(c.conn, "%s%s", c.prefix, stat)
 		if nil != err {
 			return err
 		}
@@ -219,7 +235,7 @@ func (c *StatsdClient) SendEvents(events map[string]event.Event) error {
 	for _, e := range events {
 		for _, stat := range e.Stats() {
 
-			stat = fmt.Sprintf("%s%s", c.prefix, strings.Replace(stat, "%HOST%", Hostname, 1))
+			stat = fmt.Sprintf("%s%s", c.prefix, strings.Replace(strings.Replace(stat, "%HOST%", Hostname, 1), "%FQDN", FQDN, 1))
 			_n := n + len(stat) + 1
 
 			if _n > UDPPayloadSize {
